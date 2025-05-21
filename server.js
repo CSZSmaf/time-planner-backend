@@ -191,3 +191,34 @@ Respond ONLY with the tasks for today.
 app.listen(port, () => {
   console.log(`✔ Server running at http://localhost:${port}`);
 });
+// ✅ AI 聊天接口
+app.post("/api/chat", async (req, res) => {
+  const { message } = req.body;
+  const DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
+  const API_KEY = process.env.DEEPSEEK_API_KEY;
+
+  try {
+    const response = await fetch(DEEPSEEK_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "deepseek-chat",
+        messages: [
+          { role: "system", content: "你是一个学业规划助理，可以回答学习、自律、时间管理相关问题。" },
+          { role: "user", content: message },
+        ],
+      }),
+    });
+
+    const data = await response.json();
+    const reply = data.choices?.[0]?.message?.content || "AI 没有回应";
+
+    res.json({ reply });
+  } catch (err) {
+    console.error("AI 聊天失败：", err);
+    res.status(500).json({ error: "AI 请求失败" });
+  }
+});
