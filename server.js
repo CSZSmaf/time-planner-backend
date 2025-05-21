@@ -1,20 +1,19 @@
 /*
-  Time‑Planner‑AI – Backend server
-  --------------------------------
+  Time‑Planner‑AI – Backend server  (CommonJS version)
+  --------------------------------------------------
   Express + PostgreSQL + DeepSeek
-  ‑ .env 需要配置：
+  .env 需要配置：
       DATABASE_URL      Postgres 连接字符串
       PORT              端口 (可选，默认 3000)
       DEEPSEEK_API_KEY  DeepSeek API Key
 */
 
-import "dotenv/config";                  // 使用 esm module
-import express from "express";
-import cors    from "cors";
-import pg      from "pg";
-import bcrypt  from "bcryptjs";           // 简单密码哈希
+require("dotenv").config();            // 读取 .env
+const express = require("express");
+const cors    = require("cors");
+const { Pool } = require("pg");
+const bcrypt  = require("bcryptjs");
 
-const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const app  = express();
@@ -205,6 +204,6 @@ app.delete("/api/tasks/:id", async (req, res) => {
 
 /*********************** 启动 *************************/
 app.listen(PORT, () => {
-  const base = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+  const base = process.env.RENDER_EXTERNAL_URL || process.env.PUBLIC_URL || "https://time-planner-backend.onrender.com";
   console.log(`🚀 Server ready on ${base}`);
 });
