@@ -86,6 +86,22 @@ app.get("/api/tasks/:userId", async (req, res) => {
     res.status(500).json({ error: "获取任务失败" });
   }
 });
+// ✅ 更新任务完成状态
+app.patch("/api/tasks/:id/done", async (req, res) => {
+  const { id } = req.params;
+  const { done } = req.body;
+
+  try {
+    await pool.query(
+      "UPDATE tasks SET done = $1 WHERE id = $2",
+      [done, id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error("更新任务完成状态失败:", err);
+    res.status(500).json({ error: "更新失败" });
+  }
+});
 
 // ====== DeepSeek 生成 7 天计划 ======
 const DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
