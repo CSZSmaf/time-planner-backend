@@ -9,7 +9,7 @@ const { Pool } = require("pg");
 
 dotenv.config();
 
-const express = require('express');
+
 const cors = require('cors'); // ✅ 引入 CORS 中间件
 const app = express();
 const port = process.env.PORT || 4000;
