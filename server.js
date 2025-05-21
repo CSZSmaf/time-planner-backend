@@ -13,6 +13,7 @@ const express = require("express");
 const cors    = require("cors");
 const { Pool } = require("pg");
 const bcrypt  = require("bcryptjs");
+const fetch   = require("node-fetch");
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -135,6 +136,37 @@ app.post("/api/plan", async (req, res) => {
   } catch (e) {
     console.error("/api/plan 失败", e);
     res.status(500).json({ error: "Plan generation failed" });
+  }
+});
+
+/*********************** AI 聊天接口 *************************/
+
+app.post("/api/chat", async (req, res) => {
+  const { message } = req.body;
+  if (!message) return res.status(400).json({ error: "消息为空" });
+
+  try {
+    const r = await fetch(DEEPSEEK_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": BEARER,
+      },
+      body: JSON.stringify({
+        model: DEEP_MODEL,
+        messages: [
+          { role: "system", content: "You are a helpful assistant." },
+          { role: "user", content: message },
+        ],
+      }),
+    });
+
+    const data = await r.json();
+    const reply = data.choices?.[0]?.message?.content || "⚠️ AI 没有返回内容";
+    res.json({ reply });
+  } catch (e) {
+    console.error("Chat 接口错误", e);
+    res.status(500).json({ error: "连接 AI 失败" });
   }
 });
 
