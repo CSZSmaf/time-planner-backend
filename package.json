@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "AI Time Planner backend server",
   "main": "server.js",
-  "type": "module",
+  "type": "commonjs",
   "scripts": {
     "start": "node server.js"
   },

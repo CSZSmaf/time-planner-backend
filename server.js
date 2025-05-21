@@ -1,14 +1,14 @@
 
-import express from "express";
-import fetch from "node-fetch";
-import dotenv from "dotenv";
-import cors from "cors";
-import bcrypt from "bcrypt";
-import jwt from "jsonwebtoken";
-import pkg from "pg";
+const express = require("express");
+const fetch = require("node-fetch");
+const dotenv = require("dotenv");
+const cors = require("cors");
+const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
+const { Pool } = require("pg");
 
 dotenv.config();
-const { Pool } = pkg;
+
 const express = require('express');
 const cors = require('cors'); // ✅ 引入 CORS 中间件
 const app = express();
