@@ -1,3 +1,4 @@
+console.log("🛠 Render 读取到的 DATABASE_URL 是：", process.env.DATABASE_URL);
 
 const express = require("express");
 const fetch = require("node-fetch");
