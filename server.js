@@ -25,15 +25,6 @@ app.use(express.json());
 /*********************** 共用工具 *************************/
 const toISOdate = (d) => d.toISOString().split("T")[0];
 
-/* 解析 DeepSeek 返回的 7 天计划到数组
-   期望格式：
-   DAY1:
-   - Maths @ 2
-   - English @ 1.5
-   DAY2:
-   ...
-   返回：[{date:"2025-05-22", task:"Maths", duration:2}, ...]
-*/
 function parsePlanText(planText, startDate = new Date()) {
   const tasks = [];
   let dayIndex = -1;
@@ -43,7 +34,7 @@ function parsePlanText(planText, startDate = new Date()) {
 
     const dayMatch = line.match(/^DAY\s*(\d+)/i);
     if (dayMatch) {
-      dayIndex = parseInt(dayMatch[1], 10) - 1; // DAY1 => 0
+      dayIndex = parseInt(dayMatch[1], 10) - 1;
       return;
     }
 
@@ -68,7 +59,7 @@ app.post("/api/register", async (req, res) => {
 
     const hash = await bcrypt.hash(password, 10);
     const { rows: newUser } = await pool.query(
-      "INSERT INTO users (email, password) VALUES ($1,$2) RETURNING id",
+      "INSERT INTO users (email, password_hash) VALUES ($1,$2) RETURNING id",
       [email, hash]
     );
     res.json({ userId: newUser[0].id });
@@ -81,11 +72,15 @@ app.post("/api/register", async (req, res) => {
 app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
   try {
-    const { rows } = await pool.query("SELECT id, password FROM users WHERE email=$1", [email]);
+    const { rows } = await pool.query("SELECT id, password_hash FROM users WHERE email=$1", [email]);
     if (!rows.length) return res.status(400).json({ error: "用户不存在" });
 
     const user = rows[0];
-    const ok = await bcrypt.compare(password, user.password);
+    if (!user.password_hash || typeof user.password_hash !== "string") {
+      return res.status(500).json({ error: "密码字段无效" });
+    }
+
+    const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) return res.status(400).json({ error: "密码错误" });
 
     res.json({ userId: user.id });
@@ -105,12 +100,11 @@ app.post("/api/plan", async (req, res) => {
   const { goal, userId } = req.body;
   if (!goal || !userId) return res.status(400).json({ error: "缺少 goal 或 userId" });
 
-  const sysPrompt = `You are a supportive study‑planning assistant.\n` +
+  const sysPrompt = `You are a supportive study-planning assistant.\n` +
                     `The user goal is: "${goal}".\n` +
-                    `Return a 7‑day schedule. STRICT FORMAT:\n` +
+                    `Return a 7-day schedule. STRICT FORMAT:\n` +
                     `DAY1:\n- Task description @ hours\nDAY2:\n...\nRespond only with the schedule.`;
   try {
-    /* === 调用 DeepSeek === */
     const r = await fetch(DEEPSEEK_URL, {
       method: "POST",
       headers: {
@@ -130,7 +124,6 @@ app.post("/api/plan", async (req, res) => {
     const planText = data.choices?.[0]?.message?.content || "";
     const tasks = parsePlanText(planText);
 
-    /* === 将任务写入数据库 === */
     for (const t of tasks) {
       await pool.query(
         "INSERT INTO tasks (user_id, task, duration, date) VALUES ($1,$2,$3,$4)",
@@ -147,7 +140,6 @@ app.post("/api/plan", async (req, res) => {
 
 /*********************** 任务 CRUD *************************/
 
-// 添加单个任务（手动）
 app.post("/api/tasks", async (req, res) => {
   const { userId, task, duration, date } = req.body;
   try {
@@ -162,7 +154,6 @@ app.post("/api/tasks", async (req, res) => {
   }
 });
 
-// 获取用户所有任务
 app.get("/api/tasks/:userId", async (req, res) => {
   const { userId } = req.params;
   try {
@@ -170,14 +161,13 @@ app.get("/api/tasks/:userId", async (req, res) => {
       "SELECT * FROM tasks WHERE user_id=$1 ORDER BY date",
       [userId]
     );
-    res.json(rows);   // 前端兼容 array
+    res.json(rows);
   } catch (e) {
     console.error("获取任务失败", e);
     res.status(500).json({ error: "获取任务失败" });
   }
 });
 
-// 更新完成状态
 app.patch("/api/tasks/:id/done", async (req, res) => {
   const { id } = req.params;
   const { done } = req.body;
@@ -190,7 +180,6 @@ app.patch("/api/tasks/:id/done", async (req, res) => {
   }
 });
 
-// 删除任务（可选）
 app.delete("/api/tasks/:id", async (req, res) => {
   const { id } = req.params;
   try {
@@ -202,7 +191,6 @@ app.delete("/api/tasks/:id", async (req, res) => {
   }
 });
 
-/*********************** 启动 *************************/
 app.listen(PORT, () => {
   const base = process.env.RENDER_EXTERNAL_URL || process.env.PUBLIC_URL || "https://time-planner-backend.onrender.com";
   console.log(`🚀 Server ready on ${base}`);
