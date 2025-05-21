@@ -1,224 +1,210 @@
-console.log("🛠 Render 读取到的 DATABASE_URL 是：", process.env.DATABASE_URL);
+/*
+  Time‑Planner‑AI – Backend server
+  --------------------------------
+  Express + PostgreSQL + DeepSeek
+  ‑ .env 需要配置：
+      DATABASE_URL      Postgres 连接字符串
+      PORT              端口 (可选，默认 3000)
+      DEEPSEEK_API_KEY  DeepSeek API Key
+*/
 
-const express = require("express");
+import "dotenv/config";                  // 使用 esm module
+import express from "express";
+import cors    from "cors";
+import pg      from "pg";
+import bcrypt  from "bcryptjs";           // 简单密码哈希
 
-const dotenv = require("dotenv");
+const { Pool } = pg;
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-const bcrypt = require("bcrypt");
-const jwt = require("jsonwebtoken");
-const { Pool } = require("pg");
-
-dotenv.config();
-
-
-const cors = require('cors'); // ✅ 引入 CORS 中间件
-const app = express();
-const port = process.env.PORT || 4000;
+const app  = express();
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static("../frontend"));
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-});
+/*********************** 共用工具 *************************/
+const toISOdate = (d) => d.toISOString().split("T")[0];
 
-// ====== 用户注册 ======
+/* 解析 DeepSeek 返回的 7 天计划到数组
+   期望格式：
+   DAY1:
+   - Maths @ 2
+   - English @ 1.5
+   DAY2:
+   ...
+   返回：[{date:"2025-05-22", task:"Maths", duration:2}, ...]
+*/
+function parsePlanText(planText, startDate = new Date()) {
+  const tasks = [];
+  let dayIndex = -1;
+  planText.split(/\r?\n/).forEach((lineRaw) => {
+    const line = lineRaw.trim();
+    if (!line) return;
+
+    const dayMatch = line.match(/^DAY\s*(\d+)/i);
+    if (dayMatch) {
+      dayIndex = parseInt(dayMatch[1], 10) - 1; // DAY1 => 0
+      return;
+    }
+
+    const taskMatch = line.match(/^[\-•]\s*(.+?)\s*@\s*([\d\.]+)/);
+    if (taskMatch && dayIndex >= 0) {
+      const [, task, hours] = taskMatch;
+      const d = new Date(startDate);
+      d.setDate(d.getDate() + dayIndex);
+      tasks.push({ task: task.trim(), duration: parseFloat(hours), date: toISOdate(d) });
+    }
+  });
+  return tasks;
+}
+
+/*********************** 用户注册 & 登录 *************************/
+
 app.post("/api/register", async (req, res) => {
   const { email, password } = req.body;
   try {
+    const { rows } = await pool.query("SELECT id FROM users WHERE email=$1", [email]);
+    if (rows.length) return res.status(400).json({ error: "邮箱已存在" });
+
     const hash = await bcrypt.hash(password, 10);
-    const result = await pool.query(
-      "INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id",
+    const { rows: newUser } = await pool.query(
+      "INSERT INTO users (email, password) VALUES ($1,$2) RETURNING id",
       [email, hash]
     );
-    res.json({ userId: result.rows[0].id });
-  } catch (err) {
-    console.error("注册失败:", err);
-    res.status(500).json({ error: "注册失败，可能邮箱已存在" });
+    res.json({ userId: newUser[0].id });
+  } catch (e) {
+    console.error("注册失败", e);
+    res.status(500).json({ error: "注册失败" });
   }
 });
 
-// ====== 用户登录 ======
 app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
   try {
-    const result = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
-    const user = result.rows[0];
-    if (!user) return res.status(401).json({ error: "用户不存在" });
+    const { rows } = await pool.query("SELECT id, password FROM users WHERE email=$1", [email]);
+    if (!rows.length) return res.status(400).json({ error: "用户不存在" });
 
-    const match = await bcrypt.compare(password, user.password_hash);
-    if (!match) return res.status(401).json({ error: "密码错误" });
+    const user = rows[0];
+    const ok = await bcrypt.compare(password, user.password);
+    if (!ok) return res.status(400).json({ error: "密码错误" });
 
     res.json({ userId: user.id });
-  } catch (err) {
-    console.error("登录失败:", err);
+  } catch (e) {
+    console.error("登录失败", e);
     res.status(500).json({ error: "登录失败" });
   }
 });
 
-// ====== 添加任务 ======
-app.post("/api/tasks", async (req, res) => {
-  const { userId, task, duration, date } = req.body;
-  try {
-    await pool.query(
-      "INSERT INTO tasks (user_id, task, duration, date) VALUES ($1, $2, $3, $4)",
-      [userId, task, duration, date]
-    );
-    res.json({ success: true });
-  } catch (err) {
-    console.error("添加任务失败:", err);
-    res.status(500).json({ error: "添加任务失败" });
-  }
-});
+/*********************** DeepSeek 计划生成功能 *************************/
 
-// ====== 获取任务 ======
-app.get("/api/tasks/:userId", async (req, res) => {
-  const { userId } = req.params;
-  try {
-    const result = await pool.query(
-      "SELECT * FROM tasks WHERE user_id = $1 ORDER BY date",
-      [userId]
-    );
-    res.json({ tasks: result.rows });
-  } catch (err) {
-    console.error("获取任务失败:", err);
-    res.status(500).json({ error: "获取任务失败" });
-  }
-});
-// ✅ 更新任务完成状态
-app.patch("/api/tasks/:id/done", async (req, res) => {
-  const { id } = req.params;
-  const { done } = req.body;
-
-  try {
-    await pool.query(
-      "UPDATE tasks SET done = $1 WHERE id = $2",
-      [done, id]
-    );
-    res.json({ success: true });
-  } catch (err) {
-    console.error("更新任务完成状态失败:", err);
-    res.status(500).json({ error: "更新失败" });
-  }
-});
-
-// ====== DeepSeek 生成 7 天计划 ======
-const DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
-const API_KEY = process.env.DEEPSEEK_API_KEY;
+const DEEPSEEK_URL  = "https://api.deepseek.com/v1/chat/completions";
+const DEEP_MODEL    = "deepseek-chat";
+const BEARER        = `Bearer ${process.env.DEEPSEEK_API_KEY}`;
 
 app.post("/api/plan", async (req, res) => {
-  const { goal } = req.body;
-  const systemPrompt = `
-You are a supportive study-planning assistant.
-The user goal is: "${goal}".
-Return a 7-day schedule. STRICT FORMAT:
-DAY1:
-- Task description @ hours
-DAY2:
-...
-Respond only with the schedule.
-`.trim();
+  const { goal, userId } = req.body;
+  if (!goal || !userId) return res.status(400).json({ error: "缺少 goal 或 userId" });
 
+  const sysPrompt = `You are a supportive study‑planning assistant.\n` +
+                    `The user goal is: "${goal}".\n` +
+                    `Return a 7‑day schedule. STRICT FORMAT:\n` +
+                    `DAY1:\n- Task description @ hours\nDAY2:\n...\nRespond only with the schedule.`;
   try {
-    const response = await fetch(DEEPSEEK_URL, {
+    /* === 调用 DeepSeek === */
+    const r = await fetch(DEEPSEEK_URL, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "deepseek-chat",
-        messages: [
-          { role: "system", content: "You are a helpful assistant." },
-          { role: "user", content: systemPrompt }
-        ]
-      })
-    });
-
-    const data = await response.json();
-    const plan = data.choices?.[0]?.message?.content || "";
-    res.json({ plan });
-  } catch (err) {
-    console.error("Error in /api/plan:", err);
-    res.status(500).json({ error: "Plan generation failed" });
-  }
-});
-
-// ====== 调整任务 ======
-app.post("/api/adjust", async (req, res) => {
-  const { unfinished, feedback } = req.body;
-  const today = new Date().toDateString();
-
-  const unfinishedToday = unfinished
-    .filter((t) => t.date === today)
-    .map((t, i) => `${i + 1}. ${t.task} (${t.duration})`)
-    .join("\n");
-
-  const adjustPrompt = `
-You are a study-planning assistant. The following tasks are unfinished:
-${unfinishedToday}
-User feedback: "${feedback}"
-Make a new schedule for today only, starting from the unfinished tasks.
-Respond ONLY with the tasks for today.
-`.trim();
-
-  try {
-    const response = await fetch(DEEPSEEK_URL, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: "deepseek-chat",
-        messages: [
-          { role: "system", content: "You are a helpful assistant." },
-          { role: "user", content: adjustPrompt }
-        ]
-      })
-    });
-
-    const data = await response.json();
-    const plan = data.choices?.[0]?.message?.content || "";
-    res.json({ plan });
-  } catch (err) {
-    console.error("Error in /api/adjust:", err);
-    res.status(500).json({ error: "Adjustment failed" });
-  }
-});
-
-app.listen(port, () => {
-  console.log(`✔ Server running at http://localhost:${port}`);
-});
-// ✅ AI 聊天接口
-app.post("/api/chat", async (req, res) => {
-  const { message } = req.body;
-  const DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions";
-  const API_KEY = process.env.DEEPSEEK_API_KEY;
-
-  try {
-    const response = await fetch(DEEPSEEK_URL, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${API_KEY}`,
         "Content-Type": "application/json",
+        "Authorization": BEARER,
       },
       body: JSON.stringify({
-        model: "deepseek-chat",
+        model: DEEP_MODEL,
         messages: [
-          { role: "system", content: "你是一个学业规划助理，可以回答学习、自律、时间管理相关问题。" },
-          { role: "user", content: message },
+          { role: "system", content: "You are a helpful assistant." },
+          { role: "user",   content: sysPrompt },
         ],
       }),
     });
 
-    const data = await response.json();
-    const reply = data.choices?.[0]?.message?.content || "AI 没有回应";
+    const data = await r.json();
+    const planText = data.choices?.[0]?.message?.content || "";
+    const tasks = parsePlanText(planText);
 
-    res.json({ reply });
-  } catch (err) {
-    console.error("AI 聊天失败：", err);
-    res.status(500).json({ error: "AI 请求失败" });
+    /* === 将任务写入数据库 === */
+    for (const t of tasks) {
+      await pool.query(
+        "INSERT INTO tasks (user_id, task, duration, date) VALUES ($1,$2,$3,$4)",
+        [userId, t.task, t.duration, t.date]
+      );
+    }
+
+    res.json({ success: true });
+  } catch (e) {
+    console.error("/api/plan 失败", e);
+    res.status(500).json({ error: "Plan generation failed" });
   }
+});
+
+/*********************** 任务 CRUD *************************/
+
+// 添加单个任务（手动）
+app.post("/api/tasks", async (req, res) => {
+  const { userId, task, duration, date } = req.body;
+  try {
+    await pool.query(
+      "INSERT INTO tasks (user_id, task, duration, date) VALUES ($1,$2,$3,$4)",
+      [userId, task, duration, date]
+    );
+    res.json({ success: true });
+  } catch (e) {
+    console.error("添加任务失败", e);
+    res.status(500).json({ error: "添加任务失败" });
+  }
+});
+
+// 获取用户所有任务
+app.get("/api/tasks/:userId", async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM tasks WHERE user_id=$1 ORDER BY date",
+      [userId]
+    );
+    res.json(rows);   // 前端兼容 array
+  } catch (e) {
+    console.error("获取任务失败", e);
+    res.status(500).json({ error: "获取任务失败" });
+  }
+});
+
+// 更新完成状态
+app.patch("/api/tasks/:id/done", async (req, res) => {
+  const { id } = req.params;
+  const { done } = req.body;
+  try {
+    await pool.query("UPDATE tasks SET done=$1 WHERE id=$2", [done, id]);
+    res.json({ success: true });
+  } catch (e) {
+    console.error("更新失败", e);
+    res.status(500).json({ error: "更新失败" });
+  }
+});
+
+// 删除任务（可选）
+app.delete("/api/tasks/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    await pool.query("DELETE FROM tasks WHERE id=$1", [id]);
+    res.json({ success: true });
+  } catch (e) {
+    console.error("删除任务失败", e);
+    res.status(500).json({ error: "删除任务失败" });
+  }
+});
+
+/*********************** 启动 *************************/
+app.listen(PORT, () => {
+  const base = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+  console.log(`🚀 Server ready on ${base}`);
 });
