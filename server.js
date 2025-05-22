@@ -238,6 +238,20 @@ app.delete("/api/tasks/:id", async (req, res) => {
   }
 });
 
+// 更新任务的已学习时长（单位：秒）
+app.patch("/api/tasks/:id/elapsed", async (req, res) => {
+  const { id } = req.params;
+  const { elapsed } = req.body;
+  try {
+    await pool.query("UPDATE tasks SET elapsed_seconds=$1 WHERE id=$2", [elapsed, id]);
+    res.json({ success: true });
+  } catch (e) {
+    console.error("更新学习时长失败", e);
+    res.status(500).json({ error: "更新学习时长失败" });
+  }
+});
+
+
 app.listen(PORT, () => {
   const base = process.env.RENDER_EXTERNAL_URL || process.env.PUBLIC_URL || "https://time-planner-backend.onrender.com";
   console.log(`🚀 Server ready on ${base}`);
