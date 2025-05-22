@@ -186,6 +186,21 @@ app.post("/api/tasks", async (req, res) => {
   }
 });
 
+app.patch("/api/tasks/:id", async (req, res) => {
+  const { id } = req.params;
+  const { task, duration } = req.body;
+  try {
+    await pool.query(
+      "UPDATE tasks SET task=$1, duration=$2 WHERE id=$3",
+      [task, duration, id]
+    );
+    res.json({ success: true });
+  } catch (e) {
+    console.error("修改任务失败", e);
+    res.status(500).json({ error: "修改任务失败" });
+  }
+});
+
 app.get("/api/tasks/:userId", async (req, res) => {
   const { userId } = req.params;
   try {
